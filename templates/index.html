@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股股息率追踪</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --border: #e6e8eb; --text: #1f2329;
+    --muted: #8a9099; --accent: #2563eb; --accent-soft: #eff4ff;
+    --green: #16a34a; --red: #dc2626; --tag: #eef1f4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.5;
+  }
+  header.topbar {
+    background: var(--card); border-bottom: 1px solid var(--border);
+    padding: 14px 20px; position: sticky; top: 0; z-index: 10;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  header.topbar h1 { font-size: 18px; margin: 0; font-weight: 650; white-space: nowrap; }
+  header.topbar .sub { color: var(--muted); font-size: 13px; }
+  .spacer { flex: 1; }
+  input[type=text], input[type=date] {
+    border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+    font-size: 14px; background: #fff; color: var(--text); outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  button {
+    border: 1px solid var(--border); background: #fff; color: var(--text);
+    border-radius: 8px; padding: 8px 14px; font-size: 14px; cursor: pointer;
+    transition: .15s; font-family: inherit;
+  }
+  button:hover { background: #f0f2f5; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.primary:hover { background: #1d4ed8; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.danger { color: var(--red); }
+  .add-form { display: flex; gap: 8px; align-items: center; }
+  .layout { display: flex; max-width: 1280px; margin: 0 auto; align-items: flex-start; }
+  .sidebar {
+    width: 224px; flex-shrink: 0; position: sticky; top: 60px;
+    max-height: calc(100vh - 76px); overflow-y: auto;
+    padding: 14px 10px; border-right: 1px solid var(--border);
+  }
+  .side-head { font-size: 13px; color: var(--muted); padding: 0 8px 10px; font-weight: 600; display: flex; align-items: center; }
+  .side-count { background: var(--tag); color: var(--muted); border-radius: 10px; padding: 0 7px; font-size: 12px; margin-left: 6px; }
+  .side-list { list-style: none; margin: 0; padding: 0; }
+  .side-item {
+    display: flex; align-items: baseline; gap: 6px; padding: 8px 10px; border-radius: 8px;
+    cursor: pointer; font-size: 14px; transition: background .12s; flex-wrap: wrap;
+  }
+  .side-item:hover { background: #f0f2f5; }
+  .side-item.active { background: var(--accent-soft); }
+  .side-item.active .side-name { color: var(--accent); }
+  .side-item .side-name { font-weight: 500; }
+  .side-item .side-code { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .side-item .side-yield { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--green); font-size: 13px; }
+  .side-item .side-yield.zero { color: var(--muted); }
+  .side-empty { color: var(--muted); font-size: 13px; padding: 14px 10px; line-height: 1.7; }
+  .side-empty span { font-size: 12px; }
+  .card.flash { box-shadow: 0 0 0 2px var(--accent); transition: box-shadow .25s; }
+  main { flex: 1; min-width: 0; padding: 20px; }
+  @media (max-width: 760px) {
+    .sidebar { display: none; }
+    .layout { max-width: 100%; }
+  }
+  .empty { text-align: center; color: var(--muted); padding: 60px 0; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px; margin-bottom: 16px;
+  }
+  .card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+  .card-head .name { font-size: 18px; font-weight: 650; }
+  .card-head .code { color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+  .card-head .del { margin-left: auto; }
+  .latest { display: flex; align-items: baseline; gap: 10px; margin: 6px 0 12px; }
+  .latest .val { font-size: 30px; font-weight: 700; color: var(--green); font-variant-numeric: tabular-nums; }
+  .latest .val.zero { color: var(--muted); }
+  .latest .meta { color: var(--muted); font-size: 13px; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: var(--tag); color: var(--muted); }
+  .tag.manual { background: #fff4e5; color: #b45309; }
+  .chart-wrap { position: relative; height: 220px; margin: 8px 0 14px; }
+  .manual-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 0 4px; border-top: 1px dashed var(--border); margin-top: 6px; }
+  .manual-form label { font-size: 13px; color: var(--muted); }
+  .manual-form input { width: 110px; }
+  .manual-form input[type=text] { width: 200px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .tbl-wrap { max-height: 240px; overflow-y: auto; }
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #1f2329; color: #fff; padding: 10px 18px; border-radius: 8px;
+    font-size: 14px; opacity: 0; transition: .25s; pointer-events: none; z-index: 50;
+    max-width: 90vw;
+  }
+  .toast.show { opacity: .96; }
+  .toast.err { background: var(--red); }
+  .spinner {
+    width: 14px; height: 14px; border: 2px solid #ffffff80; border-top-color: #fff;
+    border-radius: 50%; display: inline-block; animation: spin .7s linear infinite; vertical-align: -2px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <h1>📈 A股股息率追踪</h1>
+  <span class="sub" id="hint">加载中…</span>
+  <div class="spacer"></div>
+  <div class="add-form">
+    <input type="text" id="codeInput" placeholder="6位股票代码" maxlength="6" inputmode="numeric">
+    <button class="primary" id="addBtn" onclick="addStock()">添加并回填</button>
+  </div>
+  <button class="primary" id="fetchBtn" onclick="fetchAll()">抓取今日全部</button>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+      <div class="side-head">我的股票<span id="sideCount" class="side-count">0</span></div>
+      <ul id="sideList" class="side-list"></ul>
+      <div id="sideEmpty" class="side-empty">暂无股票<br><span>在上方输入代码添加</span></div>
+    </aside>
+    <main>
+      <div id="stocks"></div>
+      <div class="empty" id="empty" style="display:none">还没有关注的股票，在上方输入代码添加吧。</div>
+    </main>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const charts = {};
+const $ = (id) => document.getElementById(id);
+const todayStr = () => new Date().toISOString().slice(0, 10);
+
+// 监听卡片可见性，自动高亮侧栏对应项
+const sideObserver = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    if (e.isIntersecting) {
+      const code = e.target.id.replace('card-', '');
+      document.querySelectorAll('.side-item').forEach(el =>
+        el.classList.toggle('active', el.dataset.code === code));
+    }
+  }
+}, { rootMargin: '-10% 0px -75% 0px', threshold: 0 });
+
+function toast(msg, isErr) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => t.className = 'toast' + (isErr ? ' err' : ''), 2600);
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  let data;
+  try { data = await r.json(); } catch (e) { data = {}; }
+  if (!r.ok) throw new Error(data.error || ('请求失败 ' + r.status));
+  return data;
+}
+
+function fmt(v, d = 2) {
+  return (v === null || v === undefined || isNaN(v)) ? '—' : Number(v).toFixed(d);
+}
+
+async function loadStocks() {
+  try {
+    const stocks = await api('/api/stocks');
+    render(stocks);
+    if (stocks.length) $('hint').textContent = `共 ${stocks.length} 只 · 点击「抓取今日全部」更新当日股息率`;
+    else $('hint').textContent = '';
+  } catch (e) {
+    $('hint').textContent = '';
+    toast(e.message, true);
+  }
+}
+
+function render(stocks) {
+  const wrap = $('stocks');
+  $('empty').style.display = stocks.length ? 'none' : 'block';
+  // 销毁旧图表
+  Object.values(charts).forEach(c => c && c.destroy());
+  for (const k in charts) delete charts[k];
+  wrap.innerHTML = '';
+  for (const s of stocks) wrap.appendChild(cardEl(s));
+  // 侧栏索引 + 监听卡片
+  renderSidebar(stocks);
+  document.querySelectorAll('.card').forEach(el => sideObserver.observe(el));
+  // 每只加载记录并绘图
+  for (const s of stocks) loadRecords(s.code);
+}
+
+function renderSidebar(stocks) {
+  $('sideCount').textContent = stocks.length;
+  $('sideEmpty').style.display = stocks.length ? 'none' : 'block';
+  $('sideList').innerHTML = stocks.map(s => {
+    const zero = (s.latest_yield === null || s.latest_yield === 0);
+    return `<li class="side-item" data-code="${s.code}" onclick="scrollToCard('${s.code}')">
+      <span class="side-name">${s.name || s.code}</span>
+      <span class="side-code">${s.code}</span>
+      <span class="side-yield ${zero ? 'zero' : ''}">${s.latest_yield === null ? '-' : fmt(s.latest_yield) + '%'}</span>
+    </li>`;
+  }).join('');
+}
+
+function scrollToCard(code) {
+  const card = $('card-' + code);
+  if (!card) return;
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  document.querySelectorAll('.side-item').forEach(el =>
+    el.classList.toggle('active', el.dataset.code === code));
+  card.classList.add('flash');
+  setTimeout(() => card.classList.remove('flash'), 1200);
+}
+
+function cardEl(s) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  el.id = 'card-' + s.code;
+  const zero = (s.latest_yield === null || s.latest_yield === 0);
+  el.innerHTML = `
+    <div class="card-head">
+      <span class="name">${s.name || ''}</span>
+      <span class="code">${s.code}</span>
+      <span class="tag ${s.latest_source === 'manual' ? 'manual' : ''}">${s.latest_source === 'manual' ? '手动' : (s.latest_source === 'auto' ? '自动' : '')}</span>
+      <button class="del danger" onclick="delStock('${s.code}','${(s.name||'').replace(/'/g,'')}')">删除</button>
+    </div>
+    <div class="latest">
+      <span class="val ${zero ? 'zero' : ''}">${s.latest_yield === null ? '—' : fmt(s.latest_yield) + '%'}</span>
+      <span class="meta">${s.latest_date ? s.latest_date + ' · ' : ''}${s.count} 条记录</span>
+    </div>
+    <div class="chart-wrap"><canvas id="chart-${s.code}"></canvas></div>
+    <div class="manual-form">
+      <label>手动录入/修正：</label>
+      <input type="date" id="d-${s.code}" value="${todayStr()}">
+      <input type="text" id="y-${s.code}" placeholder="股息率%" inputmode="decimal">
+      <input type="text" id="n-${s.code}" placeholder="备注(可选)">
+      <button onclick="saveRecord('${s.code}')">保存</button>
+    </div>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>日期</th><th>股息率</th><th>收盘价</th><th>来源</th><th>备注</th><th></th></tr></thead>
+      <tbody id="tbl-${s.code}"><tr><td colspan="6" style="color:var(--muted)">加载中…</td></tr></tbody>
+    </table></div>
+  `;
+  return el;
+}
+
+async function loadRecords(code) {
+  try {
+    const rows = await api('/api/records/' + code);
+    // 表格（倒序）
+    const tb = $('tbl-' + code);
+    if (!rows.length) {
+      tb.innerHTML = '<tr><td colspan="6" style="color:var(--muted)">暂无记录</td></tr>';
+    } else {
+      tb.innerHTML = rows.slice().reverse().map(r => `
+        <tr>
+          <td>${r.date}</td>
+          <td class="num">${fmt(r.yield)}%</td>
+          <td class="num">${r.price == null ? '—' : fmt(r.price)}</td>
+          <td><span class="tag ${r.source === 'manual' ? 'manual' : ''}">${r.source === 'manual' ? '手动' : '自动'}</span></td>
+          <td>${r.note || ''}</td>
+          <td><button class="danger" style="padding:2px 8px" onclick="delRecord('${code}','${r.date}')">删</button></td>
+        </tr>`).join('');
+    }
+    drawChart(code, rows);
+  } catch (e) {
+    toast(code + ' 记录加载失败：' + e.message, true);
+  }
+}
+
+function drawChart(code, rows) {
+  const ctx = $('chart-' + code);
+  if (!ctx) return;
+  const labels = rows.map(r => r.date);
+  const data = rows.map(r => r.yield);
+  if (charts[code]) charts[code].destroy();
+  charts[code] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: '股息率(%)', data, borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)',
+        borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: .2, fill: true,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (c) => {
+              const r = rows[c.dataIndex];
+              return `股息率 ${fmt(r.yield)}%` + (r.price != null ? `  ·  收盘 ¥${fmt(r.price)}` : '');
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { maxTicksLimit: 8, color: '#8a9099' }, grid: { display: false } },
+        y: { ticks: { color: '#8a9099', callback: (v) => v + '%' }, grid: { color: '#eef1f4' } }
+      }
+    }
+  });
+}
+
+async function addStock() {
+  const code = $('codeInput').value.trim();
+  if (!/^\d{6}$/.test(code)) { toast('请输入6位数字股票代码', true); return; }
+  const btn = $('addBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 添加中…';
+  try {
+    const res = await api('/api/stocks', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code })
+    });
+    $('codeInput').value = '';
+    let msg = `已添加 ${res.name}(${res.code})`;
+    if (res.backfilled) msg += `，回填 ${res.backfilled} 条历史`;
+    if (res.warning) msg += `；${res.warning}`;
+    toast(msg, !!res.warning);
+    await loadStocks();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = '添加并回填';
+  }
+}
+
+async function fetchAll() {
+  const btn = $('fetchBtn');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 抓取中…';
+  try {
+    const res = await api('/api/fetch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const ok = res.filter(r => r.ok).length, fail = res.length - ok;
+    let msg = `抓取完成：成功 ${ok}/${res.length}`;
+    if (fail) msg += `，失败 ${fail}`;
+    toast(msg, fail > 0);
+    await loadStocks();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false; btn.textContent = '抓取今日全部';
+  }
+}
+
+async function saveRecord(code) {
+  const date = $('d-' + code).value;
+  const yld = $('y-' + code).value.trim();
+  const note = $('n-' + code).value.trim();
+  if (!date) { toast('请选择日期', true); return; }
+  if (yld === '' || isNaN(Number(yld))) { toast('请输入有效的股息率数字', true); return; }
+  try {
+    await api('/api/records/' + code, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, yield: Number(yld), note })
+    });
+    $('y-' + code).value = ''; $('n-' + code).value = '';
+    toast('已保存');
+    await loadStocks();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function delRecord(code, date) {
+  if (!confirm(`删除 ${code} 在 ${date} 的记录？`)) return;
+  try {
+    await api('/api/records/' + code + '?date=' + encodeURIComponent(date), { method: 'DELETE' });
+    await loadStocks();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function delStock(code, name) {
+  if (!confirm(`删除 ${name || code} 及其全部记录？`)) return;
+  try {
+    await api('/api/stocks/' + code, { method: 'DELETE' });
+    await loadStocks();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+$('codeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addStock(); });
+loadStocks();
+</script>
+</body>
+</html>
