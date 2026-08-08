@@ -14,8 +14,11 @@
 import os
 import time
 import sqlite3
-from datetime import datetime
+import requests
+from datetime import datetime, timedelta
 from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
+from bs4 import BeautifulSoup
 
 # 先把 tqdm 静音，再导入 akshare，使 akshare 内部 `from tqdm import tqdm` 拿到静音版本，
 # 避免 stock_info_a_code_name 分页进度条刷屏。
@@ -33,6 +36,25 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "data.db")
 
 app = Flask(__name__)
+
+# 行业行情缓存（60秒），避免频繁请求同花顺
+_industry_cache = None
+_industry_cache_ts = 0.0
+
+# 板块指数走势缓存：name -> (ts, rows)，5分钟
+_industry_hist_cache = {}
+_industry_hist_ttl = 300
+
+# 全市场高股息率筛选缓存（30分钟）
+_screener_cache = None
+_screener_cache_ts = 0.0
+_SCREENER_TTL = 1800
+
+_THS_UA = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/89.0.4389.90 Safari/537.36"
+}
+_DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 
 
 # --------------------------------------------------------------------------
@@ -275,6 +297,240 @@ def dividend_history(code):
 
     years_list = sorted(years_data.values(), key=lambda x: x["year"], reverse=True)
     return jsonify({"code": code, "years": years_list})
+
+
+@app.route("/api/industries", methods=["GET"])
+def industries():
+    """A股细分行业实时涨跌（同花顺），按涨跌幅降序。缓存60秒。"""
+    global _industry_cache, _industry_cache_ts
+    now = time.time()
+    if _industry_cache is None or now - _industry_cache_ts > 60:
+        df = _retry(lambda: ak.stock_board_industry_summary_ths())
+        _industry_cache = df
+        _industry_cache_ts = now
+
+    rows = []
+    for _, r in _industry_cache.iterrows():
+        rows.append(
+            {
+                "name": str(r["板块"]),
+                "pct": float(r["涨跌幅"]) if pd.notna(r["涨跌幅"]) else 0.0,
+                "amount": float(r["总成交额"]) if pd.notna(r["总成交额"]) else 0.0,
+                "net_inflow": float(r["净流入"]) if pd.notna(r["净流入"]) else 0.0,
+                "up": int(r["上涨家数"]) if pd.notna(r["上涨家数"]) else 0,
+                "down": int(r["下跌家数"]) if pd.notna(r["下跌家数"]) else 0,
+                "leader": str(r["领涨股"]),
+                "leader_pct": float(r["领涨股-涨跌幅"]) if pd.notna(r["领涨股-涨跌幅"]) else 0.0,
+            }
+        )
+    rows.sort(key=lambda x: x["pct"], reverse=True)
+    return jsonify(
+        {
+            "updated": datetime.now().strftime("%H:%M:%S"),
+            "count": len(rows),
+            "rows": rows,
+        }
+    )
+
+
+@app.route("/api/industry/<name>", methods=["GET"])
+def industry_history(name):
+    """同花顺板块指数近一年走势（日线收盘价），缓存5分钟。"""
+    cached = _industry_hist_cache.get(name)
+    if cached and time.time() - cached[0] < _industry_hist_ttl:
+        return jsonify({"name": name, "count": len(cached[1]), "rows": cached[1]})
+
+    end = datetime.now().strftime("%Y%m%d")
+    start = (datetime.now() - timedelta(days=3660)).strftime("%Y%m%d")  # 近10年
+    df = _retry(lambda: ak.stock_board_industry_index_ths(symbol=name, start_date=start, end_date=end))
+    df = df.dropna(subset=["日期", "收盘价"])
+
+    rows = []
+    prev = None
+    for _, r in df.iterrows():
+        close = float(r["收盘价"])
+        pct = None if prev is None else (close / prev - 1.0) * 100.0
+        rows.append({"date": str(r["日期"]), "close": round(close, 2), "pct": round(pct, 2) if pct is not None else None})
+        prev = close
+
+    _industry_hist_cache[name] = (time.time(), rows)
+    return jsonify({"name": name, "count": len(rows), "rows": rows})
+
+
+# --------------------------------------------------------------------------
+# 全市场高股息率筛选（>3% 按行业分组）
+# --------------------------------------------------------------------------
+def _ths_board_members(board_code):
+    """扫描同花顺单个细分行业的全部成分股，返回 {code: (名称, 现价)}。
+
+    同花顺成分列表每页20只、默认最多返回100只；用「默认序 + 升序」两遍
+    扫描取并集即可覆盖全部成分（对不足100只的板块只需一遍）。
+    """
+    s = requests.Session()
+    s.headers.update(_THS_UA)
+    members = {}
+    for order in ("", "order/asc/"):
+        page = 1
+        while True:
+            try:
+                r = s.get(
+                    f"http://q.10jqka.com.cn/thshy/detail/{order}page/{page}/code/{board_code}/",
+                    timeout=10,
+                )
+                soup = BeautifulSoup(r.text, "lxml")
+                table = soup.find("table", attrs={"class": "m-table"})
+                rows = [tr for tr in (table.find_all("tr") if table else []) if tr.find("td")]
+            except Exception:  # noqa: BLE001 单页失败即放弃该板块后续页
+                break
+            if not rows:
+                break
+            for tr in rows:
+                tds = [td.get_text(strip=True) for td in tr.find_all("td")]
+                if len(tds) >= 4 and tds[1].isdigit():
+                    members[tds[1]] = (tds[2], tds[3])  # code -> (名称, 现价)
+            if len(rows) < 20 or len(members) >= 200:
+                break
+            page += 1
+        if len(members) < 100:
+            break  # 未触发100只封顶，另一序不会带来新成分
+    return members
+
+
+def _fetch_share_bonus(last_year, this_year):
+    """分页抓东财「分红送配」报表（除权除息日在上一年起），
+    返回 {code: {上一年: 每股合计, 当年: 每股合计}}（每10股派息/10=每股）。
+    """
+    agg = {}
+    page = 1
+    total = None
+    while True:
+        params = {
+            "reportName": "RPT_SHAREBONUS_DET",
+            "columns": "ALL",
+            "source": "WEB",
+            "client": "WEB",
+            "pageSize": "500",
+            "pageNumber": str(page),
+            "filter": f"(EX_DIVIDEND_DATE>='{last_year}-01-01')",
+        }
+        try:
+            j = requests.get(
+                _DATACENTER_URL,
+                params=params,
+                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://data.eastmoney.com/yjfp/"},
+                timeout=20,
+            ).json()
+        except Exception:  # noqa: BLE001
+            break
+        res = j.get("result") or {}
+        data = res.get("data") or []
+        if not data:
+            break
+        for r in data:
+            if r.get("ASSIGN_PROGRESS") != "实施分配":
+                continue
+            amt = r.get("PRETAX_BONUS_RMB")
+            ex = str(r.get("EX_DIVIDEND_DATE"))[:10]
+            if not amt or len(ex) != 10:
+                continue
+            code = r.get("SECURITY_CODE")
+            try:
+                year = int(ex[:4])
+            except ValueError:
+                continue
+            if year not in (last_year, this_year):
+                continue
+            d = agg.setdefault(code, {last_year: 0.0, this_year: 0.0})
+            d[year] += float(amt) / 10.0
+        total = res.get("count")
+        if total is None or page * 500 >= total:
+            break
+        page += 1
+    return agg
+
+
+def compute_screener():
+    """全市场股息率>3% 按同花顺细分行业分组。
+
+    股息率规则与个股卡片一致：优先当年（除权除息日所属年）全部已实施分红，
+    当年无分红则用上一年度全部分红；现价取同花顺成分页最新价。
+    """
+    this_year = datetime.now().year
+    last_year = this_year - 1
+
+    boards = _retry(lambda: ak.stock_board_industry_name_ths())
+    board_names = dict(zip(boards["code"].astype(str), boards["name"]))
+
+    board_of_code, name_of_code, price_of_code = {}, {}, {}
+    bcodes = list(board_names.keys())
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        results = list(ex.map(_ths_board_members, bcodes))
+    for bcode, members in zip(bcodes, results):
+        bname = board_names[bcode]
+        for code, (nm, pr) in members.items():
+            board_of_code[code] = bname
+            name_of_code[code] = nm
+            try:
+                price_of_code[code] = float(pr)
+            except ValueError:
+                pass  # 停牌等无现价
+
+    divs = _fetch_share_bonus(last_year, this_year)
+
+    groups = {}
+    for code, years in divs.items():
+        if code not in board_of_code:
+            continue
+        price = price_of_code.get(code)
+        if not price or price <= 0:
+            continue
+        total = years[this_year] if years[this_year] > 0 else years[last_year]
+        if total <= 0:
+            continue
+        y = total / price * 100.0
+        if y <= 3.0:
+            continue
+        groups.setdefault(board_of_code[code], []).append(
+            {
+                "code": code,
+                "name": name_of_code.get(code, code),
+                "price": round(price, 2),
+                "div": round(total, 4),
+                "yield": round(y, 2),
+            }
+        )
+
+    group_list = []
+    for bname, lst in groups.items():
+        lst.sort(key=lambda x: x["yield"], reverse=True)
+        group_list.append(
+            {"industry": bname, "count": len(lst), "max_yield": lst[0]["yield"], "stocks": lst}
+        )
+    group_list.sort(key=lambda x: x["max_yield"], reverse=True)
+
+    return {
+        "count": sum(len(g["stocks"]) for g in group_list),
+        "industry_count": len(group_list),
+        "groups": group_list,
+    }
+
+
+@app.route("/api/dividend-screener", methods=["GET"])
+def dividend_screener():
+    """全市场股息率>3%按行业分组。?refresh=1 强制刷新缓存。"""
+    global _screener_cache, _screener_cache_ts
+    refresh = request.args.get("refresh") == "1"
+    now = time.time()
+    if not refresh and _screener_cache is not None and now - _screener_cache_ts < _SCREENER_TTL:
+        return jsonify(_screener_cache)
+    try:
+        payload = compute_screener()
+    except Exception as e:  # noqa: BLE001
+        return jsonify({"error": f"高股息筛选失败：{e}"}), 500
+    payload["updated"] = datetime.now().strftime("%H:%M:%S")
+    _screener_cache = payload
+    _screener_cache_ts = time.time()
+    return jsonify(payload)
 
 
 @app.route("/api/fetch", methods=["POST"])

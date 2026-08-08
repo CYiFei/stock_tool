@@ -112,6 +112,31 @@
     border-radius: 50%; display: inline-block; animation: spin .7s linear infinite; vertical-align: -2px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  /* 行业涨跌模块 */
+  .industry-card { margin-bottom: 24px; }
+  .ind-scroll { max-height: 380px; overflow-y: auto; }
+  .ind-table { margin-top: 4px; }
+  .ind-table td:first-child { font-weight: 500; }
+  .ind-table tbody tr { cursor: pointer; }
+  .ind-table tbody tr:hover { background: #f0f2f5; }
+  .up { color: var(--red); }
+  .down { color: var(--green); }
+  .ind-table .up, .ind-table .down { font-variant-numeric: tabular-nums; }
+  .ind-detail { padding: 4px 10px 12px; }
+  .ind-detail-head { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .ind-chart-wrap { position: relative; height: 220px; }
+  /* 高股息率>3%按行业模块 */
+  .scr-scroll { max-height: 520px; overflow-y: auto; }
+  .scr-group { border: 1px solid var(--border); border-radius: 10px; margin: 8px 0; overflow: hidden; }
+  .scr-head { display: flex; align-items: baseline; gap: 10px; padding: 9px 12px; cursor: pointer; background: #fafbfc; user-select: none; }
+  .scr-head:hover { background: #f0f2f5; }
+  .scr-head .arrow { font-size: 10px; transition: transform .2s; color: var(--muted); }
+  .scr-head .arrow.fold { transform: rotate(-90deg); }
+  .scr-name { font-weight: 600; font-size: 14px; }
+  .scr-count { font-size: 12px; color: var(--muted); }
+  .scr-max { margin-left: auto; font-size: 13px; color: var(--green); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .scr-body { padding: 4px 8px 8px; }
+  .scr-yield { font-weight: 600; color: var(--green); font-variant-numeric: tabular-nums; }
   /* 主区域两个平级区块 */
   .section { margin-bottom: 24px; }
   .section-head {
@@ -164,6 +189,27 @@
     </aside>
     <main>
       <div id="stocks">
+        <div class="card industry-card" id="industryCard">
+          <div class="card-head">
+            <span class="name">🏭 A股行业涨跌</span>
+            <span class="code">同花顺细分行业</span>
+            <span class="spacer"></span>
+            <span class="code" id="industryMeta">加载中…</span>
+            <button id="industryOrderBtn" onclick="toggleIndustryOrder()">涨幅榜</button>
+            <button id="industryRefreshBtn" onclick="refreshIndustries()">刷新</button>
+          </div>
+          <div class="ind-scroll" id="industryBody"><span style="color:var(--muted);font-size:13px">加载中…</span></div>
+        </div>
+        <div class="card industry-card" id="screenerCard">
+          <div class="card-head">
+            <span class="name">💰 股息率 &gt; 3% 按行业</span>
+            <span class="code">全市场 · 当年/上一年度分红</span>
+            <span class="spacer"></span>
+            <span class="code" id="screenerMeta">加载中…</span>
+            <button id="screenerRefreshBtn" onclick="refreshScreener()">刷新</button>
+          </div>
+          <div class="scr-scroll" id="screenerBody"><span style="color:var(--muted);font-size:13px">加载中…（首次约需 20 秒）</span></div>
+        </div>
         <div class="section" id="heldSection">
           <div class="section-head">持有的股票<span id="heldCount" class="side-count">0</span></div>
           <div id="heldCards"></div>
@@ -605,8 +651,207 @@ function drawDivChart(code, years) {
   });
 }
 
+// ---------- 行业涨跌模块 ----------
+let industryOrder = -1; // -1 涨幅榜(降序) | 1 跌幅榜(升序)
+let industryExpanded = null;   // 当前展开走势图的板块
+const industryHistCharts = {}; // 板块指数走势图实例
+
+async function toggleIndustryChart(name) {
+  const rowEl = document.querySelector(`#industryBody tr[data-name="${name}"]`);
+  if (!rowEl) return;
+  // 点同一个板块 → 收起
+  if (industryExpanded === name) {
+    if (industryHistCharts[name]) { industryHistCharts[name].destroy(); delete industryHistCharts[name]; }
+    const old = $('indrow-' + name); if (old) old.remove();
+    industryExpanded = null;
+    return;
+  }
+  // 收起上一个展开的板块
+  if (industryExpanded && industryHistCharts[industryExpanded]) {
+    industryHistCharts[industryExpanded].destroy();
+    delete industryHistCharts[industryExpanded];
+    const old = $('indrow-' + industryExpanded); if (old) old.remove();
+  }
+  industryExpanded = name;
+  // 在点击行下方插入详情行
+  const tr = document.createElement('tr');
+  tr.id = 'indrow-' + name;
+  tr.style.background = '#fff';
+  tr.innerHTML = `<td colspan="5"><div class="ind-detail">
+    <div class="ind-detail-head">${name} · 板块指数走势 <span id="indmeta-${name}" style="color:var(--muted);font-size:12px;font-weight:400"></span></div>
+    <div class="ind-chart-wrap"><canvas id="indchart-${name}"></canvas></div>
+  </div></td>`;
+  rowEl.after(tr);
+  loadIndustryChart(name);
+}
+
+async function loadIndustryChart(name) {
+  const meta = $('indmeta-' + name);
+  try {
+    const data = await api('/api/industry/' + encodeURIComponent(name));
+    if (!data.rows || !data.rows.length) { meta.textContent = '无数据'; return; }
+    meta.textContent = `近${(data.count / 244).toFixed(1)}年 · ${data.rows[0].date} ~ ${data.rows[data.rows.length - 1].date}`;
+    const canvas = $('indchart-' + name);
+    if (!canvas) return;
+    const labels = data.rows.map(r => r.date);
+    const closes = data.rows.map(r => r.close);
+    industryHistCharts[name] = new Chart(canvas, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: '板块指数', data: closes, borderColor: '#2563eb', backgroundColor: 'rgba(37,99,235,.12)',
+          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: .15, fill: true,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (c) => {
+                const r = data.rows[c.dataIndex];
+                const p = r.pct == null ? '' : `  (${r.pct >= 0 ? '+' : ''}${fmt(r.pct, 2)}%)`;
+                return `指数 ${fmt(r.close)}${p}`;
+              }
+            }
+          }
+        },
+        scales: {
+          x: { ticks: { maxTicksLimit: 8, color: '#8a9099' }, grid: { display: false } },
+          y: { ticks: { color: '#8a9099' }, grid: { color: '#eef1f4' } }
+        }
+      }
+    });
+  } catch (e) {
+    meta.textContent = '加载失败：' + e.message;
+  }
+}
+
+async function loadIndustries() {
+  const body = $('industryBody');
+  try {
+    const data = await api('/api/industries');
+    renderIndustries(data.rows);
+    $('industryMeta').textContent = `${data.count} 个行业 · 更新 ${data.updated}`;
+  } catch (e) {
+    body.innerHTML = `<div style="color:var(--muted);padding:10px 0">加载失败：${e.message}</div>`;
+  }
+}
+
+function renderIndustries(rows) {
+  const body = $('industryBody');
+  if (industryExpanded && industryHistCharts[industryExpanded]) {
+    industryHistCharts[industryExpanded].destroy();
+    delete industryHistCharts[industryExpanded];
+  }
+  industryExpanded = null;
+  const sorted = rows.slice().sort((a, b) => (b.pct - a.pct) * industryOrder);
+  body.innerHTML = `<table class="ind-table">
+    <thead><tr><th>行业</th><th class="num">涨跌幅</th><th>领涨股</th><th class="num">领涨涨幅</th><th class="num">涨/跌家数</th></tr></thead>
+    <tbody>${sorted.map(r => {
+      const cls = r.pct > 0 ? 'up' : (r.pct < 0 ? 'down' : '');
+      const lcls = r.leader_pct > 0 ? 'up' : (r.leader_pct < 0 ? 'down' : '');
+      return `<tr data-name="${r.name}" onclick="toggleIndustryChart('${r.name}')" title="点击查看板块指数走势">
+        <td>${r.name}</td>
+        <td class="num ${cls}">${fmt(r.pct, 2)}%</td>
+        <td>${r.leader}</td>
+        <td class="num ${lcls}">${fmt(r.leader_pct, 2)}%</td>
+        <td class="num"><span class="up">${r.up}</span>/<span class="down">${r.down}</span></td>
+      </tr>`;
+    }).join('')}</tbody></table>`;
+}
+
+function toggleIndustryOrder() {
+  industryOrder = -industryOrder;
+  $('industryOrderBtn').textContent = industryOrder === -1 ? '涨幅榜' : '跌幅榜';
+  loadIndustries();
+}
+
+async function refreshIndustries() {
+  const btn = $('industryRefreshBtn');
+  btn.disabled = true;
+  try {
+    await loadIndustries();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---------- 高股息率>3%按行业模块 ----------
+const screenerExpanded = new Set();
+let screenerSeeded = false;
+
+function toggleScreenerGroup(ind) {
+  if (screenerExpanded.has(ind)) screenerExpanded.delete(ind);
+  else screenerExpanded.add(ind);
+  const group = document.querySelector(`.scr-group[data-ind="${CSS.escape(ind)}"]`);
+  if (!group) return;
+  group.querySelector('.scr-body').style.display = screenerExpanded.has(ind) ? '' : 'none';
+  group.querySelector('.arrow').classList.toggle('fold', !screenerExpanded.has(ind));
+}
+
+async function loadScreener(refresh) {
+  const body = $('screenerBody');
+  try {
+    const data = await api('/api/dividend-screener' + (refresh ? '?refresh=1' : ''));
+    renderScreener(data);
+  } catch (e) {
+    body.innerHTML = `<div style="color:var(--muted);padding:10px 0">加载失败：${e.message}</div>`;
+    $('screenerMeta').textContent = '';
+  }
+}
+
+function renderScreener(data) {
+  $('screenerMeta').textContent = `${data.count} 只 · ${data.industry_count} 个行业 · ${data.updated}`;
+  const groups = data.groups.slice().sort((a, b) => b.max_yield - a.max_yield);
+  // 首次默认展开前5个行业，之后保留用户的展开/收起状态
+  if (!screenerSeeded) {
+    groups.slice(0, 5).forEach(g => screenerExpanded.add(g.industry));
+    screenerSeeded = true;
+  }
+  $('screenerBody').innerHTML = groups.map(g => {
+    const open = screenerExpanded.has(g.industry);
+    return `<div class="scr-group" data-ind="${g.industry}">
+      <div class="scr-head" onclick="toggleScreenerGroup('${g.industry}')">
+        <span class="arrow ${open ? '' : 'fold'}">▾</span>
+        <span class="scr-name">${g.industry}</span>
+        <span class="scr-count">${g.count} 只</span>
+        <span class="scr-max">最高 ${fmt(g.max_yield)}%</span>
+      </div>
+      <div class="scr-body" style="${open ? '' : 'display:none'}">
+        <table class="ind-table">
+          <thead><tr><th>代码</th><th>名称</th><th class="num">现价</th><th class="num">每股分红</th><th class="num">股息率</th></tr></thead>
+          <tbody>${g.stocks.map(s => `
+            <tr>
+              <td class="num">${s.code}</td>
+              <td>${s.name}</td>
+              <td class="num">¥${fmt(s.price)}</td>
+              <td class="num">¥${fmt(s.div, 3)}</td>
+              <td class="num scr-yield">${fmt(s.yield)}%</td>
+            </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function refreshScreener() {
+  const btn = $('screenerRefreshBtn');
+  btn.disabled = true;
+  try {
+    await loadScreener(true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 $('codeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addStock(); });
 loadStocks();
+loadIndustries();
+loadScreener();
 </script>
 </body>
 </html>
