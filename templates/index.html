@@ -143,6 +143,15 @@
     font-size: 15px; font-weight: 650; color: var(--text);
     display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
   }
+  /* 分类切换下拉 */
+  .view-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
+  .view-label { font-size: 15px; font-weight: 650; }
+  .view-bar select {
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+    font-size: 14px; background: #fff; color: var(--text); outline: none; cursor: pointer;
+    font-family: inherit;
+  }
+  .view-bar select:focus { border-color: var(--accent); }
   /* 卡片中的星标按钮 */
   .star-btn {
     border: none; background: none; cursor: pointer; font-size: 18px; padding: 0 2px;
@@ -210,12 +219,18 @@
           </div>
           <div class="scr-scroll" id="screenerBody"><span style="color:var(--muted);font-size:13px">加载中…（首次约需 20 秒）</span></div>
         </div>
+        <div class="view-bar">
+          <span class="view-label">我的股票</span>
+          <select id="viewSelect" onchange="switchView()">
+            <option value="held">持有的股票</option>
+            <option value="interest">我感兴趣的</option>
+          </select>
+          <span class="side-count" id="viewCount">0</span>
+        </div>
         <div class="section" id="heldSection">
-          <div class="section-head">持有的股票<span id="heldCount" class="side-count">0</span></div>
           <div id="heldCards"></div>
         </div>
         <div class="section" id="interestSection">
-          <div class="section-head">我感兴趣的<span id="interestCount" class="side-count">0</span></div>
           <div id="interestedCards"></div>
         </div>
       </div>
@@ -276,6 +291,33 @@ async function loadStocks() {
   }
 }
 
+// 当前展示分类：held | interest
+let currentView = 'held';
+
+function switchView() {
+  currentView = $('viewSelect').value;
+  applyView();
+}
+
+function applyView() {
+  const heldSection = $('heldSection');
+  const interestSection = $('interestSection');
+  const heldCards = $('heldCards');
+  const interestedCards = $('interestedCards');
+  const showHeld = currentView === 'held';
+  heldSection.style.display = (showHeld && heldCards.children.length) ? '' : 'none';
+  interestSection.style.display = (!showHeld && interestedCards.children.length) ? '' : 'none';
+  $('viewCount').textContent = showHeld ? heldCards.children.length : interestedCards.children.length;
+  // 隐藏状态下创建的图表容器宽为0，切换后需按实际尺寸重绘
+  requestAnimationFrame(() => {
+    const container = showHeld ? heldCards : interestedCards;
+    container.querySelectorAll('.card').forEach(card => {
+      const code = card.id.replace('card-', '');
+      [charts[code], priceCharts[code], divCharts[code]].forEach(c => c && c.resize());
+    });
+  });
+}
+
 function render(stocks) {
   const held = $('heldCards');
   const interested = $('interestedCards');
@@ -291,12 +333,13 @@ function render(stocks) {
   interested.innerHTML = '';
   const heldList = stocks.filter(s => !s.interested);
   const interestedList = stocks.filter(s => s.interested);
+  // 当前分类为空时自动切到有股票的分类
+  if (currentView === 'held' && heldList.length === 0 && interestedList.length > 0) currentView = 'interest';
+  else if (currentView === 'interest' && interestedList.length === 0 && heldList.length > 0) currentView = 'held';
+  $('viewSelect').value = currentView;
   for (const s of heldList) held.appendChild(cardEl(s));
   for (const s of interestedList) interested.appendChild(cardEl(s));
-  $('heldCount').textContent = heldList.length;
-  $('interestCount').textContent = interestedList.length;
-  $('heldSection').style.display = heldList.length ? '' : 'none';
-  $('interestSection').style.display = interestedList.length ? '' : 'none';
+  applyView();
   // 侧栏索引 + 监听卡片
   renderSidebar(stocks);
   document.querySelectorAll('.card').forEach(el => sideObserver.observe(el));
@@ -332,6 +375,14 @@ function renderSidebar(stocks) {
 function scrollToCard(code) {
   const card = $('card-' + code);
   if (!card) return;
+  // 目标卡片所在分类当前未展示时先切换过去
+  const inInterest = !!card.closest('#interestSection');
+  const target = inInterest ? 'interest' : 'held';
+  if (currentView !== target) {
+    currentView = target;
+    $('viewSelect').value = target;
+    applyView();
+  }
   card.scrollIntoView({ behavior: 'smooth', block: 'start' });
   document.querySelectorAll('.side-item').forEach(el =>
     el.classList.toggle('active', el.dataset.code === code));
