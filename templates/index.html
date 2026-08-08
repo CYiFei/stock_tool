@@ -40,6 +40,10 @@
   button:disabled { opacity: .5; cursor: not-allowed; }
   button.danger { color: var(--red); }
   .add-form { display: flex; gap: 8px; align-items: center; }
+  .add-form .rad { display: inline-flex; align-items: center; gap: 3px; font-size: 13px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+  .add-form .rad input { accent-color: var(--accent); margin: 0; }
+  .tag.hold { background: var(--accent-soft); color: var(--accent); }
+  .tag.interest { background: #fff7e6; color: #b45309; }
   .layout { display: flex; max-width: 1280px; margin: 0 auto; align-items: flex-start; }
   .sidebar {
     width: 224px; flex-shrink: 0; position: sticky; top: 60px;
@@ -83,7 +87,9 @@
   .latest .meta { color: var(--muted); font-size: 13px; }
   .tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: var(--tag); color: var(--muted); }
   .tag.manual { background: #fff4e5; color: #b45309; }
-  .chart-wrap { position: relative; height: 220px; margin: 8px 0 14px; }
+  .chart-label { font-size: 12px; color: var(--muted); margin: 10px 0 4px; }
+  .chart-wrap { position: relative; height: 220px; margin: 0 0 14px; }
+  .chart-wrap.price { height: 160px; margin-bottom: 0; }
   .manual-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 10px 0 4px; border-top: 1px dashed var(--border); margin-top: 6px; }
   .manual-form label { font-size: 13px; color: var(--muted); }
   .manual-form input { width: 110px; }
@@ -106,6 +112,34 @@
     border-radius: 50%; display: inline-block; animation: spin .7s linear infinite; vertical-align: -2px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+  /* 主区域两个平级区块 */
+  .section { margin-bottom: 24px; }
+  .section-head {
+    font-size: 15px; font-weight: 650; color: var(--text);
+    display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+  }
+  /* 卡片中的星标按钮 */
+  .star-btn {
+    border: none; background: none; cursor: pointer; font-size: 18px; padding: 0 2px;
+    line-height: 1; color: #d1d5db; transition: .15s; vertical-align: -1px;
+  }
+  .star-btn:hover { color: #f59e0b; }
+  .star-btn.on { color: #f59e0b; }
+  /* 历年分红 */
+  .div-history { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+  .div-head { font-size: 13px; font-weight: 600; color: var(--muted); cursor: pointer; user-select: none; display: flex; align-items: center; gap: 4px; }
+  .div-head .arrow { font-size: 10px; transition: transform .2s; }
+  .div-history.collapsed .div-body { display: none; }
+  .div-history.collapsed .div-head .arrow { transform: rotate(-90deg); }
+  .div-body { margin-top: 6px; }
+  .div-chart-wrap { position: relative; height: 150px; margin: 6px 0 4px; }
+  .div-year { margin-bottom: 8px; }
+  .div-year-head { font-size: 13px; font-weight: 600; padding: 4px 0; display: flex; align-items: baseline; gap: 8px; }
+  .div-year-head .yr { color: var(--text); }
+  .div-year-head .yr-total { color: var(--green); font-variant-numeric: tabular-nums; font-size: 13px; }
+  .div-year-head .yr-total.zero { color: var(--muted); }
+  .div-records { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 2px 12px; padding-left: 4px; }
+  .div-records span { white-space: nowrap; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -115,6 +149,8 @@
   <div class="spacer"></div>
   <div class="add-form">
     <input type="text" id="codeInput" placeholder="6位股票代码" maxlength="6" inputmode="numeric">
+    <label class="rad"><input type="radio" name="cat" value="held" checked>持有</label>
+    <label class="rad"><input type="radio" name="cat" value="interested">感兴趣</label>
     <button class="primary" id="addBtn" onclick="addStock()">添加并回填</button>
   </div>
   <button class="primary" id="fetchBtn" onclick="fetchAll()">抓取今日全部</button>
@@ -123,11 +159,20 @@
 <div class="layout">
   <aside class="sidebar">
       <div class="side-head">我的股票<span id="sideCount" class="side-count">0</span></div>
-      <ul id="sideList" class="side-list"></ul>
+      <div id="sideList"></div>
       <div id="sideEmpty" class="side-empty">暂无股票<br><span>在上方输入代码添加</span></div>
     </aside>
     <main>
-      <div id="stocks"></div>
+      <div id="stocks">
+        <div class="section" id="heldSection">
+          <div class="section-head">持有的股票<span id="heldCount" class="side-count">0</span></div>
+          <div id="heldCards"></div>
+        </div>
+        <div class="section" id="interestSection">
+          <div class="section-head">我感兴趣的<span id="interestCount" class="side-count">0</span></div>
+          <div id="interestedCards"></div>
+        </div>
+      </div>
       <div class="empty" id="empty" style="display:none">还没有关注的股票，在上方输入代码添加吧。</div>
     </main>
   </div>
@@ -137,6 +182,8 @@
 
 <script>
 const charts = {};
+const priceCharts = {};
+const divCharts = {};
 const $ = (id) => document.getElementById(id);
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
@@ -184,13 +231,26 @@ async function loadStocks() {
 }
 
 function render(stocks) {
-  const wrap = $('stocks');
+  const held = $('heldCards');
+  const interested = $('interestedCards');
   $('empty').style.display = stocks.length ? 'none' : 'block';
   // 销毁旧图表
   Object.values(charts).forEach(c => c && c.destroy());
+  Object.values(priceCharts).forEach(c => c && c.destroy());
+  Object.values(divCharts).forEach(c => c && c.destroy());
   for (const k in charts) delete charts[k];
-  wrap.innerHTML = '';
-  for (const s of stocks) wrap.appendChild(cardEl(s));
+  for (const k in priceCharts) delete priceCharts[k];
+  for (const k in divCharts) delete divCharts[k];
+  held.innerHTML = '';
+  interested.innerHTML = '';
+  const heldList = stocks.filter(s => !s.interested);
+  const interestedList = stocks.filter(s => s.interested);
+  for (const s of heldList) held.appendChild(cardEl(s));
+  for (const s of interestedList) interested.appendChild(cardEl(s));
+  $('heldCount').textContent = heldList.length;
+  $('interestCount').textContent = interestedList.length;
+  $('heldSection').style.display = heldList.length ? '' : 'none';
+  $('interestSection').style.display = interestedList.length ? '' : 'none';
   // 侧栏索引 + 监听卡片
   renderSidebar(stocks);
   document.querySelectorAll('.card').forEach(el => sideObserver.observe(el));
@@ -201,14 +261,26 @@ function render(stocks) {
 function renderSidebar(stocks) {
   $('sideCount').textContent = stocks.length;
   $('sideEmpty').style.display = stocks.length ? 'none' : 'block';
-  $('sideList').innerHTML = stocks.map(s => {
+  const item = (s) => {
     const zero = (s.latest_yield === null || s.latest_yield === 0);
     return `<li class="side-item" data-code="${s.code}" onclick="scrollToCard('${s.code}')">
+      <span class="star-btn ${s.interested ? 'on' : ''}" style="font-size:13px;padding:0" onclick="toggleInterested('${s.code}', event)" title="切换持有/感兴趣">★</span>
       <span class="side-name">${s.name || s.code}</span>
-      <span class="side-code">${s.code}</span>
       <span class="side-yield ${zero ? 'zero' : ''}">${s.latest_yield === null ? '-' : fmt(s.latest_yield) + '%'}</span>
     </li>`;
-  }).join('');
+  };
+  const held = stocks.filter(s => !s.interested);
+  const interested = stocks.filter(s => s.interested);
+  let html = '';
+  if (held.length) {
+    html += `<div class="side-head">持有的股票<span class="side-count">${held.length}</span></div>`;
+    html += `<ul class="side-list">${held.map(item).join('')}</ul>`;
+  }
+  if (interested.length) {
+    html += `<div class="side-head">我感兴趣的<span class="side-count">${interested.length}</span></div>`;
+    html += `<ul class="side-list">${interested.map(item).join('')}</ul>`;
+  }
+  $('sideList').innerHTML = html;
 }
 
 function scrollToCard(code) {
@@ -228,8 +300,10 @@ function cardEl(s) {
   const zero = (s.latest_yield === null || s.latest_yield === 0);
   el.innerHTML = `
     <div class="card-head">
+      <button class="star-btn ${s.interested ? 'on' : ''}" onclick="toggleInterested('${s.code}', event)" title="切换持有/感兴趣">★</button>
       <span class="name">${s.name || ''}</span>
       <span class="code">${s.code}</span>
+      <span class="tag ${s.interested ? 'interest' : 'hold'}">${s.interested ? '感兴趣' : '持有'}</span>
       <span class="tag ${s.latest_source === 'manual' ? 'manual' : ''}">${s.latest_source === 'manual' ? '手动' : (s.latest_source === 'auto' ? '自动' : '')}</span>
       <button class="del danger" onclick="delStock('${s.code}','${(s.name||'').replace(/'/g,'')}')">删除</button>
     </div>
@@ -237,7 +311,10 @@ function cardEl(s) {
       <span class="val ${zero ? 'zero' : ''}">${s.latest_yield === null ? '—' : fmt(s.latest_yield) + '%'}</span>
       <span class="meta">${s.latest_date ? s.latest_date + ' · ' : ''}${s.count} 条记录</span>
     </div>
+    <div class="chart-label">股息率走势 (%)</div>
     <div class="chart-wrap"><canvas id="chart-${s.code}"></canvas></div>
+    <div class="chart-label">收盘价走势 (¥)</div>
+    <div class="chart-wrap price"><canvas id="pricechart-${s.code}"></canvas></div>
     <div class="manual-form">
       <label>手动录入/修正：</label>
       <input type="date" id="d-${s.code}" value="${todayStr()}">
@@ -249,6 +326,15 @@ function cardEl(s) {
       <thead><tr><th>日期</th><th>股息率</th><th>收盘价</th><th>来源</th><th>备注</th><th></th></tr></thead>
       <tbody id="tbl-${s.code}"><tr><td colspan="6" style="color:var(--muted)">加载中…</td></tr></tbody>
     </table></div>
+    <div class="div-history" id="divhist-${s.code}">
+      <div class="div-head" onclick="toggleDivHistory('${s.code}')">
+        <span class="arrow">▾</span>历年分红 <span id="divhist-count-${s.code}" style="font-weight:400;font-size:12px"></span>
+      </div>
+      <div class="div-body" id="divhist-body-${s.code}">
+        <div class="div-chart-wrap"><canvas id="divchart-${s.code}"></canvas></div>
+        <div id="divhist-list-${s.code}"><span style="color:var(--muted);font-size:12px">加载中…</span></div>
+      </div>
+    </div>
   `;
   return el;
 }
@@ -272,9 +358,48 @@ async function loadRecords(code) {
         </tr>`).join('');
     }
     drawChart(code, rows);
+    drawPriceChart(code, rows);
+    loadDividendHistory(code);
   } catch (e) {
     toast(code + ' 记录加载失败：' + e.message, true);
   }
+}
+
+function drawPriceChart(code, rows) {
+  const ctx = $('pricechart-' + code);
+  if (!ctx) return;
+  if (priceCharts[code]) priceCharts[code].destroy();
+  const labels = rows.map(r => r.date);
+  const data = rows.map(r => r.price);
+  priceCharts[code] = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: '收盘价', data, borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,.12)',
+        borderWidth: 2, pointRadius: 0, pointHoverRadius: 4, tension: .2, fill: true,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (c) => {
+              const r = rows[c.dataIndex];
+              return `收盘价 ¥${fmt(r.price)}` + (r.yield != null ? `  ·  股息率 ${fmt(r.yield)}%` : '');
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { maxTicksLimit: 8, color: '#8a9099' }, grid: { display: false } },
+        y: { ticks: { color: '#8a9099', callback: (v) => '¥' + v }, grid: { color: '#eef1f4' } }
+      }
+    }
+  });
 }
 
 function drawChart(code, rows) {
@@ -308,7 +433,7 @@ function drawChart(code, rows) {
       },
       scales: {
         x: { ticks: { maxTicksLimit: 8, color: '#8a9099' }, grid: { display: false } },
-        y: { ticks: { color: '#8a9099', callback: (v) => v + '%' }, grid: { color: '#eef1f4' } }
+        y: { beginAtZero: true, ticks: { color: '#8a9099', stepSize: 0.5, callback: (v) => v + '%' }, grid: { color: '#eef1f4' } }
       }
     }
   });
@@ -317,15 +442,17 @@ function drawChart(code, rows) {
 async function addStock() {
   const code = $('codeInput').value.trim();
   if (!/^\d{6}$/.test(code)) { toast('请输入6位数字股票代码', true); return; }
+  const cat = document.querySelector('input[name="cat"]:checked').value;
+  const interested = (cat === 'interested');
   const btn = $('addBtn');
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 添加中…';
   try {
     const res = await api('/api/stocks', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code })
+      body: JSON.stringify({ code, interested })
     });
     $('codeInput').value = '';
-    let msg = `已添加 ${res.name}(${res.code})`;
+    let msg = `已添加 ${res.name}(${res.code}) 到${interested ? '感兴趣的股票' : '持有的股票'}`;
     if (res.backfilled) msg += `，回填 ${res.backfilled} 条历史`;
     if (res.warning) msg += `；${res.warning}`;
     toast(msg, !!res.warning);
@@ -391,6 +518,91 @@ async function delStock(code, name) {
   } catch (e) {
     toast(e.message, true);
   }
+}
+
+async function toggleInterested(code, event) {
+  if (event) { event.stopPropagation(); event.preventDefault(); }
+  try {
+    const stocks = await api('/api/stocks');
+    const s = stocks.find(s => s.code === code);
+    if (!s) return;
+    await api('/api/stocks/' + code + '/interested', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interested: !s.interested })
+    });
+    await loadStocks();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+function toggleDivHistory(code) {
+  $('divhist-' + code).classList.toggle('collapsed');
+}
+
+async function loadDividendHistory(code) {
+  const chartWrap = $('divchart-' + code) ? $('divchart-' + code).parentElement : null;
+  const cnt = $('divhist-count-' + code);
+  const list = $('divhist-list-' + code);
+  try {
+    const data = await api('/api/dividends/' + code);
+    if (!data.years || !data.years.length) {
+      cnt.textContent = '';
+      if (chartWrap) chartWrap.style.display = 'none';
+      list.innerHTML = '<span style="color:var(--muted);font-size:12px">暂无分红记录</span>';
+      return;
+    }
+    if (chartWrap) chartWrap.style.display = '';
+    cnt.textContent = '（' + data.years.length + ' 年）';
+    drawDivChart(code, data.years);
+    list.innerHTML = data.years.map(y => {
+      const zero = y.total === 0;
+      const records = y.records.map(r => {
+        const d = r.date.slice(5); // MM-DD
+        return `<span>${d} 每股 ¥${r.amount.toFixed(3)}</span>`;
+      }).join('');
+      return `<div class="div-year">
+        <div class="div-year-head">
+          <span class="yr">${y.year}</span>
+          <span class="yr-total ${zero ? 'zero' : ''}">每股 ¥${y.total.toFixed(3)}</span>
+        </div>
+        <div class="div-records">${records}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    // 分红加载失败不影响主体功能
+    if (chartWrap) chartWrap.style.display = 'none';
+    list.innerHTML = '<span style="color:var(--muted);font-size:12px">加载失败</span>';
+  }
+}
+
+function drawDivChart(code, years) {
+  const ctx = $('divchart-' + code);
+  if (!ctx) return;
+  if (divCharts[code]) divCharts[code].destroy();
+  divCharts[code] = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: years.map(y => y.year),
+      datasets: [{
+        label: '每股分红(元)',
+        data: years.map(y => y.total),
+        backgroundColor: 'rgba(37,99,235,.28)',
+        borderColor: '#2563eb', borderWidth: 1, borderRadius: 3,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (c) => `每股分红合计 ¥${c.parsed.y.toFixed(3)}` } }
+      },
+      scales: {
+        x: { ticks: { color: '#8a9099' }, grid: { display: false } },
+        y: { beginAtZero: true, ticks: { color: '#8a9099', callback: (v) => '¥' + v }, grid: { color: '#eef1f4' } }
+      }
+    }
+  });
 }
 
 $('codeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addStock(); });

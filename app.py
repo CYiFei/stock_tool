@@ -49,9 +49,10 @@ def init_db():
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS stocks (
-                code     TEXT PRIMARY KEY,
-                name     TEXT,
-                added_at TEXT
+                code       TEXT PRIMARY KEY,
+                name       TEXT,
+                added_at   TEXT,
+                interested INTEGER DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS records (
                 id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,6 +66,11 @@ def init_db():
             );
             """
         )
+        # 兼容旧库：补上 interested 列
+        try:
+            conn.execute("ALTER TABLE stocks ADD COLUMN interested INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
         conn.commit()
 
 
@@ -163,6 +169,7 @@ def list_stocks():
                     "code": s["code"],
                     "name": s["name"],
                     "added_at": s["added_at"],
+                    "interested": bool(s["interested"]),
                     "latest_yield": rec["yield"] if rec else None,
                     "latest_date": rec["date"] if rec else None,
                     "latest_source": rec["source"] if rec else None,
@@ -176,6 +183,7 @@ def list_stocks():
 def add_stock():
     body = request.get_json(silent=True) or {}
     code = str(body.get("code", "")).strip()
+    interested = 1 if body.get("interested") else 0
     if not (code.isdigit() and len(code) == 6):
         return jsonify({"error": "股票代码须为6位数字"}), 400
 
@@ -187,12 +195,16 @@ def add_stock():
     with closing(get_db()) as conn:
         try:
             conn.execute(
-                "INSERT INTO stocks(code, name, added_at) VALUES(?,?,?)",
-                (code, name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+                "INSERT INTO stocks(code, name, added_at, interested) VALUES(?,?,?,?)",
+                (code, name, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), interested),
             )
             conn.commit()
         except sqlite3.IntegrityError:
-            pass  # 已存在，忽略
+            # 已存在：更新到所选分类
+            conn.execute(
+                "UPDATE stocks SET interested=?, name=? WHERE code=?", (interested, name, code)
+            )
+            conn.commit()
 
     # 回填近1年历史，让图表立即有数据
     backfilled = 0
@@ -211,7 +223,10 @@ def add_stock():
     except Exception as e:  # noqa: BLE001
         warning = f"已添加，但历史回填失败：{e}"
 
-    return jsonify({"code": code, "name": name, "backfilled": backfilled, "warning": warning})
+    return jsonify({
+        "code": code, "name": name, "interested": bool(interested),
+        "backfilled": backfilled, "warning": warning,
+    })
 
 
 @app.route("/api/stocks/<code>", methods=["DELETE"])
@@ -221,6 +236,45 @@ def del_stock(code):
         conn.execute("DELETE FROM records WHERE code=?", (code,))
         conn.commit()
     return jsonify({"ok": True})
+
+
+@app.route("/api/stocks/<code>/interested", methods=["POST"])
+def toggle_interested(code):
+    """切换感兴趣标记。"""
+    body = request.get_json(silent=True) or {}
+    val = 1 if body.get("interested") else 0
+    with closing(get_db()) as conn:
+        conn.execute("UPDATE stocks SET interested=? WHERE code=?", (val, code))
+        conn.commit()
+    return jsonify({"ok": True, "code": code, "interested": bool(val)})
+
+
+@app.route("/api/dividends/<code>", methods=["GET"])
+def dividend_history(code):
+    """返回历年分红明细，按年份分组。"""
+    try:
+        df = get_dividends(code)
+    except Exception as e:
+        return jsonify({"error": f"获取分红数据失败：{e}"}), 500
+
+    if df.empty:
+        return jsonify({"code": code, "years": []})
+
+    years_data = {}
+    for _, row in df.iterrows():
+        d = row["除权除息日"]
+        amt = float(row["派息"]) / 10.0  # 每10股 → 每股
+        y = d.year
+        if y not in years_data:
+            years_data[y] = {"year": y, "total": 0.0, "records": []}
+        years_data[y]["records"].append({
+            "date": d.strftime("%Y-%m-%d"),
+            "amount": round(amt, 4),
+        })
+        years_data[y]["total"] = round(years_data[y]["total"] + amt, 4)
+
+    years_list = sorted(years_data.values(), key=lambda x: x["year"], reverse=True)
+    return jsonify({"code": code, "years": years_list})
 
 
 @app.route("/api/fetch", methods=["POST"])
