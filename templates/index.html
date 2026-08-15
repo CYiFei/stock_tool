@@ -279,12 +279,22 @@ function fmt(v, d = 2) {
   return (v === null || v === undefined || isNaN(v)) ? '—' : Number(v).toFixed(d);
 }
 
-async function loadStocks() {
+async function loadStocks(autoRefresh) {
   try {
     const stocks = await api('/api/stocks');
     render(stocks);
-    if (stocks.length) $('hint').textContent = `共 ${stocks.length} 只 · 点击「抓取今日全部」更新当日股息率`;
-    else $('hint').textContent = '';
+    if (stocks.length) {
+      if (autoRefresh) {
+        $('hint').textContent = `共 ${stocks.length} 只 · 正在自动更新最新数据…`;
+        // 页面首次加载时自动更新所有股票数据（持有+感兴趣）
+        await fetchAll(true);
+        $('hint').textContent = `共 ${stocks.length} 只 · 自动更新完成 · 点击「抓取今日全部」可手动刷新`;
+      } else {
+        $('hint').textContent = `共 ${stocks.length} 只 · 点击「抓取今日全部」更新当日股息率`;
+      }
+    } else {
+      $('hint').textContent = '';
+    }
   } catch (e) {
     $('hint').textContent = '';
     toast(e.message, true);
@@ -561,7 +571,7 @@ async function addStock() {
   }
 }
 
-async function fetchAll() {
+async function fetchAll(silent) {
   const btn = $('fetchBtn');
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> 抓取中…';
   try {
@@ -569,10 +579,10 @@ async function fetchAll() {
     const ok = res.filter(r => r.ok).length, fail = res.length - ok;
     let msg = `抓取完成：成功 ${ok}/${res.length}`;
     if (fail) msg += `，失败 ${fail}`;
-    toast(msg, fail > 0);
-    await loadStocks();
+    if (!silent) toast(msg, fail > 0);
+    await loadStocks(false);
   } catch (e) {
-    toast(e.message, true);
+    if (!silent) toast(e.message, true);
   } finally {
     btn.disabled = false; btn.textContent = '抓取今日全部';
   }
@@ -900,7 +910,7 @@ async function refreshScreener() {
 }
 
 $('codeInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addStock(); });
-loadStocks();
+loadStocks(true);  // 页面首次打开时自动更新持有和感兴趣的股票
 loadIndustries();
 loadScreener();
 </script>
