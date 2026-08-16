@@ -195,6 +195,7 @@ def list_stocks():
                     "latest_yield": rec["yield"] if rec else None,
                     "latest_date": rec["date"] if rec else None,
                     "latest_source": rec["source"] if rec else None,
+                    "latest_price": rec["price"] if rec else None,
                     "count": cnt,
                 }
             )

@@ -84,6 +84,9 @@
   .latest { display: flex; align-items: baseline; gap: 10px; margin: 6px 0 12px; }
   .latest .val { font-size: 30px; font-weight: 700; color: var(--green); font-variant-numeric: tabular-nums; }
   .latest .val.zero { color: var(--muted); }
+  .latest .price { font-size: 30px; font-weight: 700; color: #f59e0b; font-variant-numeric: tabular-nums; }
+  .latest .price.zero { color: var(--muted); }
+  .latest .price-label { font-size: 13px; color: var(--muted); margin-right: 2px; align-self: center; }
   .latest .meta { color: var(--muted); font-size: 13px; }
   .tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; background: var(--tag); color: var(--muted); }
   .tag.manual { background: #fff4e5; color: #b45309; }
@@ -405,6 +408,7 @@ function cardEl(s) {
   el.className = 'card';
   el.id = 'card-' + s.code;
   const zero = (s.latest_yield === null || s.latest_yield === 0);
+  const priceZero = (s.latest_price === null || s.latest_price === 0);
   el.innerHTML = `
     <div class="card-head">
       <button class="star-btn ${s.interested ? 'on' : ''}" onclick="toggleInterested('${s.code}', event)" title="切换持有/感兴趣">★</button>
@@ -415,7 +419,10 @@ function cardEl(s) {
       <button class="del danger" onclick="delStock('${s.code}','${(s.name||'').replace(/'/g,'')}')">删除</button>
     </div>
     <div class="latest">
+      <span class="price-label">股息率</span>
       <span class="val ${zero ? 'zero' : ''}">${s.latest_yield === null ? '—' : fmt(s.latest_yield) + '%'}</span>
+      <span class="price-label">最新价</span>
+      <span class="price ${priceZero ? 'zero' : ''}">${s.latest_price === null ? '—' : '¥' + fmt(s.latest_price)}</span>
       <span class="meta">${s.latest_date ? s.latest_date + ' · ' : ''}${s.count} 条记录</span>
     </div>
     <div class="chart-label">股息率走势 (%)</div>
