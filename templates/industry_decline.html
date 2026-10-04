@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股三级行业下跌比例</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --border: #e6e8eb; --text: #1f2329;
+    --muted: #8a9099; --accent: #2563eb; --accent-soft: #eff4ff;
+    --green: #16a34a; --red: #dc2626; --tag: #eef1f4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.5;
+  }
+  header.topbar {
+    background: var(--card); border-bottom: 1px solid var(--border);
+    padding: 14px 20px; position: sticky; top: 0; z-index: 10;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  header.topbar h1 { font-size: 18px; margin: 0; font-weight: 650; white-space: nowrap; }
+  header.topbar .sub { color: var(--muted); font-size: 13px; }
+  .spacer { flex: 1; }
+  button {
+    border: 1px solid var(--border); background: #fff; color: var(--text);
+    border-radius: 8px; padding: 8px 14px; font-size: 14px; cursor: pointer;
+    transition: .15s; font-family: inherit;
+  }
+  button:hover { background: #f0f2f5; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.primary:hover { background: #1d4ed8; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  a.backlink { color: var(--accent); font-size: 14px; text-decoration: none; white-space: nowrap; }
+  a.backlink:hover { text-decoration: underline; }
+  main { max-width: 1400px; margin: 0 auto; padding: 20px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px; margin-bottom: 16px;
+  }
+  .card-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .card-head .name { font-size: 17px; font-weight: 650; }
+  .card-head .code { color: var(--muted); font-size: 13px; }
+  .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .toolbar input[type=text] {
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px;
+    font-size: 14px; background: #fff; color: var(--text); outline: none; width: 200px;
+  }
+  .toolbar input:focus { border-color: var(--accent); }
+  .toolbar .hint { color: var(--muted); font-size: 12.5px; }
+  .legend { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .legend .sw { display: inline-block; width: 34px; height: 12px; border-radius: 3px; border: 1px solid var(--border); }
+  /* 构建进度 */
+  .progress-box { text-align: center; padding: 50px 10px; color: var(--muted); font-size: 14px; }
+  .progress-box .big { font-size: 16px; color: var(--text); font-weight: 600; margin-bottom: 6px; }
+  .bar { width: min(420px, 80%); height: 8px; background: var(--tag); border-radius: 4px; margin: 14px auto 6px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0%; background: var(--accent); border-radius: 4px; transition: width .4s; }
+  .bar-err > div { background: var(--red); }
+  .spinner {
+    width: 14px; height: 14px; border: 2px solid #b9c0ff; border-top-color: var(--accent);
+    border-radius: 50%; display: inline-block; animation: spin .7s linear infinite; vertical-align: -2px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* 主表 */
+  .tbl-scroll { overflow: auto; max-height: calc(100vh - 220px); border: 1px solid var(--border); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+  thead th {
+    position: sticky; top: 0; background: #fafbfc; z-index: 2; color: var(--muted); font-weight: 500;
+    border-bottom: 1px solid var(--border); cursor: pointer; user-select: none;
+  }
+  thead th.sorted { color: var(--accent); font-weight: 600; }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr.board { cursor: pointer; }
+  tbody tr.board:hover { background: #f0f2f5; }
+  tbody tr.market { background: var(--accent-soft); font-weight: 600; cursor: default; }
+  tbody tr.market:hover { background: var(--accent-soft); }
+  td.cell { min-width: 64px; }
+  td.name-cell { font-weight: 500; }
+  tr.detail > td { padding: 0; background: #fcfcfd; }
+  .detail-wrap { padding: 10px 14px 14px; max-height: 340px; overflow: auto; }
+  .detail-head { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .detail-head span { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .up { color: var(--red); }
+  .down { color: var(--green); }
+  .note { color: var(--muted); font-size: 12.5px; line-height: 1.8; margin-top: 12px; }
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #1f2329; color: #fff; padding: 10px 18px; border-radius: 8px;
+    font-size: 14px; opacity: 0; transition: .25s; pointer-events: none; z-index: 50;
+  }
+  .toast.show { opacity: .96; }
+  .toast.err { background: var(--red); }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <h1>🏭 A股三级行业下跌比例</h1>
+  <span class="sub" id="metaHint">加载中…</span>
+  <div class="spacer"></div>
+  <a class="backlink" href="/">← 返回股息率追踪</a>
+  <button class="primary" id="refreshBtn" onclick="refreshData()">重建数据</button>
+</header>
+
+<main>
+  <div class="card">
+    <div class="card-head">
+      <span class="name">近 1~10 年各行业下跌股票占比</span>
+      <span class="code">同花顺三级行业 · 后复权月收盘价（含分红送转）</span>
+      <span class="spacer"></span>
+      <span class="legend"><span class="sw" style="background:#fde8e8"></span>偏强<span class="sw" style="background:#c9f0d6"></span>偏弱（越绿下跌比例越高）</span>
+    </div>
+
+    <div id="progressView" style="display:none">
+      <div class="progress-box">
+        <div class="big" id="progPhase">准备中…</div>
+        <div id="progText">正在获取数据，全量构建约需 10 分钟（数据源限速），可离开此页稍后再来。</div>
+        <div class="bar" id="progBar"><div id="progBarFill"></div></div>
+        <div id="progCount" style="font-size:12.5px"></div>
+      </div>
+    </div>
+
+    <div id="errorView" style="display:none">
+      <div class="progress-box">
+        <div class="big">构建失败</div>
+        <div id="errText" style="color:var(--red)"></div>
+        <div style="margin-top:12px"><button class="primary" onclick="refreshData()">重试</button></div>
+      </div>
+    </div>
+
+    <div id="tableView" style="display:none">
+      <div class="toolbar">
+        <input type="text" id="searchInput" placeholder="筛选行业…" oninput="renderTable()">
+        <span class="hint">点击表头排序 · 点击行业行查看成分股明细</span>
+      </div>
+      <div class="tbl-scroll">
+        <table id="mainTable">
+          <thead><tr id="theadRow"></tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+      <div class="note" id="noteBox"></div>
+    </div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let data = null;            // /api/industry-decline payload
+let sortN = 1;              // 当前排序的周期（1~10）
+let sortDir = -1;           // -1 降序（下跌比例高在前）
+let expanded = null;        // 当前展开明细的行业名
+let polling = false;
+
+function toast(msg, isErr) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => t.className = 'toast' + (isErr ? ' err' : ''), 2600);
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  let d;
+  try { d = await r.json(); } catch (e) { d = {}; }
+  if (!r.ok && !d.status) throw new Error(d.error || ('请求失败 ' + r.status));
+  return d;
+}
+
+// 跌比例 → 颜色：<50 偏强（红系），>50 偏弱（绿系）
+function cellBg(pct) {
+  if (pct === null || pct === undefined) return 'transparent';
+  if (pct >= 50) {
+    const a = ((pct - 50) / 50 * 0.55).toFixed(3);
+    return `rgba(22,163,74,${a})`;
+  }
+  const a = ((50 - pct) / 50 * 0.30).toFixed(3);
+  return `rgba(220,38,38,${a})`;
+}
+
+function ratioOf(row, n) {
+  const r = row.ratios.find(x => x.n === n);
+  return r ? r.pct : null;
+}
+function ratioDetail(row, n) {
+  const r = row.ratios.find(x => x.n === n);
+  return r ? r : { down: 0, comp: 0, pct: null };
+}
+
+function buildThead() {
+  const tr = $('theadRow');
+  let html = '<th style="cursor:default">行业</th><th class="num" style="cursor:default">成分</th>';
+  for (const n of data.horizons) {
+    const sorted = n === sortN;
+    html += `<th class="num ${sorted ? 'sorted' : ''}" data-n="${n}" title="近${n}年，比较日 ${data.targets[n] || ''}">` +
+      `近${n}年 ${sorted ? (sortDir === -1 ? '▾' : '▴') : ''}</th>`;
+  }
+  tr.innerHTML = html;
+  tr.querySelectorAll('th[data-n]').forEach(th => {
+    th.addEventListener('click', () => {
+      const n = Number(th.dataset.n);
+      if (sortN === n) sortDir = -sortDir;
+      else { sortN = n; sortDir = -1; }
+      buildThead();
+      renderTable();
+    });
+  });
+}
+
+function renderTable() {
+  const kw = $('searchInput').value.trim();
+  const tbody = $('tbody');
+  const m = data.market;
+  const mCell = (n) => {
+    const r = ratioDetail(m, n);
+    const pct = r.pct;
+    return `<td class="num cell" style="background:${cellBg(pct)}" title="下跌 ${r.down} / 可比 ${r.comp}">${pct === null ? '—' : pct + '%'}</td>`;
+  };
+  let html = `<tr class="market"><td class="name-cell">全市场</td><td class="num">${m.total}</td>` +
+    data.horizons.map(mCell).join('') + '</tr>';
+
+  const boards = data.boards.filter(b => !kw || b.name.includes(kw));
+  boards.sort((a, b) => {
+    const va = ratioOf(a, sortN), vb = ratioOf(b, sortN);
+    if (va === null && vb === null) return a.name.localeCompare(b.name, 'zh');
+    if (va === null) return 1;
+    if (vb === null) return -1;
+    return (vb - va) * -sortDir || a.name.localeCompare(b.name, 'zh');
+  });
+  html += boards.map(b => {
+    const open = expanded === b.name;
+    let row = `<tr class="board" data-name="${b.name}">` +
+      `<td class="name-cell">${open ? '▾' : '▸'} ${b.name}</td><td class="num">${b.total}</td>` +
+      data.horizons.map(n => {
+        const r = ratioDetail(b, n);
+        return `<td class="num cell" style="background:${cellBg(r.pct)}" title="下跌 ${r.down} / 可比 ${r.comp}">${r.pct === null ? '—' : r.pct + '%'}</td>`;
+      }).join('') + '</tr>';
+    if (open) row += detailRow(b);
+    return row;
+  }).join('');
+  tbody.innerHTML = html;
+  tbody.querySelectorAll('tr.board').forEach(tr => {
+    tr.addEventListener('click', () => {
+      const name = tr.dataset.name;
+      expanded = (expanded === name) ? null : name;
+      renderTable();
+    });
+  });
+}
+
+function detailRow(b) {
+  const idx = data.horizons.indexOf(sortN);
+  const stocks = b.stocks.slice().sort((a, b2) => {
+    const va = a.chg[idx], vb = b2.chg[idx];
+    if (va === null && vb === null) return 0;
+    if (va === null) return 1;
+    if (vb === null) return -1;
+    return va - vb;
+  }).slice(0, 300);
+  const cls = v => v === null ? '' : (v > 0 ? 'up' : (v < 0 ? 'down' : ''));
+  const fmt = v => v === null ? '—' : (v > 0 ? '+' : '') + v.toFixed(2) + '%';
+  const fmtP = p => (p === null || p === undefined) ? '—' : '¥' + p.toFixed(2);
+  return `<tr class="detail"><td colspan="${2 + data.horizons.length}"><div class="detail-wrap">` +
+    `<div class="detail-head">${b.name} · 成分股涨跌幅 <span>按近${sortN}年排序（最多展示300只）· 红涨绿跌，基于后复权价（含分红送转）</span></div>` +
+    `<table><thead><tr><th>代码</th><th>名称</th><th class="num">现价</th>` +
+    data.horizons.map(n => `<th class="num">近${n}年</th>`).join('') + '</tr></thead><tbody>' +
+    stocks.map(s => `<tr><td class="num">${s.code}</td><td>${s.name}</td><td class="num">${fmtP(s.price)}</td>` +
+      s.chg.map(v => `<td class="num ${cls(v)}">${fmt(v)}</td>`).join('') + '</tr>').join('') +
+    '</tbody></table></div></td></tr>';
+}
+
+function showProgress(st) {
+  $('progressView').style.display = '';
+  $('errorView').style.display = 'none';
+  $('tableView').style.display = 'none';
+  $('progPhase').textContent = st.phase || '构建中…';
+  const p = st.progress || {};
+  if (p.total > 0) {
+    const pct = Math.min(100, Math.round(p.done / p.total * 100));
+    $('progBarFill').style.width = pct + '%';
+    $('progCount').textContent = `${p.done} / ${p.total} 只个股` + (p.failed ? ` · 失败 ${p.failed}` : '');
+    $('progText').textContent = '正在抓取个股月K收盘价（后复权 · 限速约10条/秒），全量约需 10 分钟…';
+  } else {
+    $('progBarFill').style.width = '8%';
+    $('progCount').textContent = '';
+    $('progText').textContent = '正在扫描行业成分股…';
+  }
+}
+
+function showError(err) {
+  $('progressView').style.display = 'none';
+  $('errorView').style.display = '';
+  $('tableView').style.display = 'none';
+  $('errText').textContent = err || '未知错误';
+}
+
+function showTable() {
+  $('progressView').style.display = 'none';
+  $('errorView').style.display = 'none';
+  $('tableView').style.display = '';
+  $('metaHint').textContent =
+    `价格截至 ${data.anchor} · 构建于 ${data.built_at || ''} · ${data.boards.length} 个行业 · ${data.market.total} 只个股`;
+  buildThead();
+  renderTable();
+  const bse = data.excluded_bse ? `北交所（92开头）${data.excluded_bse} 只因数据源不支持月K，未计入统计。` : '';
+  $('noteBox').innerHTML =
+    '口径说明：涨跌幅按后复权月K收盘计算（含历史分红送转，近似总回报）；基准价为个股最近一根月K收盘（含当月最新价），' +
+    '「近N年」取基准日减 N 个自然年前的最后一根月K收盘。' +
+    '下跌比例 = 近N年涨跌幅为负的股票数 ÷ 该行业 N 年前已上市的股票数（上市不足 N 年不计入该列分母，悬停单元格可看具体只数）。' +
+    '现价为构建时实时行情。成分股为当前同花顺行业名单，已退市个股不在统计内。' + bse +
+    '数据来源：同花顺行业成分 + 腾讯月K；点「重建数据」可更新（全量约需 10 分钟，源站限速）。';
+}
+
+async function loadPayload() {
+  try {
+    const d = await api('/api/industry-decline');
+    if (d.status === 'ready' && d.boards) {
+      data = d;
+      showTable();
+      return true;
+    }
+    if (d.status === 'building') { showProgress(d); startPolling(); }
+    return false;
+  } catch (e) {
+    showError(e.message);
+    return false;
+  }
+}
+
+function startPolling() {
+  if (polling) return;
+  polling = true;
+  const timer = setInterval(async () => {
+    try {
+      const st = await api('/api/industry-decline/status');
+      if (st.status === 'building') { showProgress(st); return; }
+      clearInterval(timer);
+      polling = false;
+      if (st.status === 'error') { showError(st.error); return; }
+      const ok = await loadPayload();
+      if (ok) toast('数据已就绪');
+    } catch (e) {
+      clearInterval(timer);
+      polling = false;
+      showError(e.message);
+    }
+  }, 1500);
+}
+
+async function refreshData() {
+  const btn = $('refreshBtn');
+  btn.disabled = true;
+  try {
+    const d = await api('/api/industry-decline/refresh', { method: 'POST' });
+    showProgress(d);
+    startPolling();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+loadPayload();
+</script>
+</body>
+</html>

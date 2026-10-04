@@ -32,10 +32,13 @@ import akshare as ak
 import pandas as pd
 from flask import Flask, request, jsonify, render_template
 
+from industry_decline import bp as industry_decline_bp
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "data.db")
 
 app = Flask(__name__)
+app.register_blueprint(industry_decline_bp)
 
 # 行业行情缓存（60秒），避免频繁请求同花顺
 _industry_cache = None
@@ -368,6 +371,7 @@ def _ths_board_members(board_code):
     扫描取并集即可覆盖全部成分（对不足100只的板块只需一遍）。
     """
     s = requests.Session()
+    s.trust_env = False  # 同花顺为国内站点，直连更稳（系统代理不稳定）
     s.headers.update(_THS_UA)
     members = {}
     for order in ("", "order/asc/"):
